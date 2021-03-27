@@ -4,6 +4,7 @@ import com.datastax.driver.core.PreparedStatement
 import com.datastax.driver.core.Session
 import com.thelastpickle.tlpstress.PartitionKey
 import com.thelastpickle.tlpstress.StressContext
+import com.thelastpickle.tlpstress.WorkloadParameter
 import com.thelastpickle.tlpstress.generators.FieldGenerator
 import com.thelastpickle.tlpstress.generators.Field
 import com.thelastpickle.tlpstress.generators.FieldFactory
@@ -16,17 +17,26 @@ class KeyValue : IStressProfile {
     lateinit var select: PreparedStatement
     lateinit var delete: PreparedStatement
 
+    @WorkloadParameter("Limit select to N rows.")
+    var ncols = 1
 
     override fun prepare(session: Session) {
-        insert = session.prepare("INSERT INTO keyvalue (key, value) VALUES (?, ?)")
-        select = session.prepare("SELECT * from keyvalue WHERE key = ?")
+        var cols = (1..ncols).joinToString(",") { i ->
+            "value$i"
+        }
+        var args = (1..ncols).joinToString(",") { _ -> "?"}
+        insert = session.prepare("INSERT INTO keyvalue (key, $cols) VALUES (?, $args)")
+        select = session.prepare("SELECT $cols from keyvalue WHERE key = ?")
         delete = session.prepare("DELETE from keyvalue WHERE key = ?")
     }
 
     override fun schema(): List<String> {
+        var cols = (1..ncols).joinToString(",") { i ->
+            "value$i text"
+        }
         val table = """CREATE TABLE IF NOT EXISTS keyvalue (
                         key text PRIMARY KEY,
-                        value text
+                        $cols
                         )""".trimIndent()
         return listOf(table)
     }
@@ -47,8 +57,10 @@ class KeyValue : IStressProfile {
             }
 
             override fun getNextMutation(partitionKey: PartitionKey): Operation {
-                val data = value.getText()
-                val bound = insert.bind(partitionKey.getText(),  data)
+                //val data = value.getText()
+                //val bound = insert.bind(partitionKey.getText(),  data)
+                val bound = insert.bind().setString("key", partitionKey.getText())
+                (1..ncols).forEach(){i -> bound.setString("value$i", value.getText())}
 
                 return Operation.Mutation(bound)
             }
