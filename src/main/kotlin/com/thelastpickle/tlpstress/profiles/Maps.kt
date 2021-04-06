@@ -6,6 +6,10 @@ import com.datastax.driver.core.Session
 import com.thelastpickle.tlpstress.PartitionKey
 import com.thelastpickle.tlpstress.StressContext
 import com.thelastpickle.tlpstress.WorkloadParameter
+import com.thelastpickle.tlpstress.generators.Field
+import com.thelastpickle.tlpstress.generators.FieldFactory
+import com.thelastpickle.tlpstress.generators.FieldGenerator
+import com.thelastpickle.tlpstress.generators.functions.Random
 import com.thelastpickle.tlpstress.profiles.IStressProfile
 import com.thelastpickle.tlpstress.profiles.IStressRunner
 import com.thelastpickle.tlpstress.profiles.Operation
@@ -20,20 +24,31 @@ class Maps : IStressProfile {
     @WorkloadParameter("Use frozen type.")
     var frozen = "false"
 
-    @WorkloadParameter("Limit select to N rows.")
+    @WorkloadParameter("Number of map<text, text> columns to create")
     var ncols = 1
+
+    @WorkloadParameter("Number of map<text, text> keys")
+    var nkeys = 1
+
+    val entries = mutableMapOf<String, String>()
 
     override fun prepare(session: Session) {
         val update_args = (1..ncols).joinToString(",") { i ->
             if (frozen == "true") {
                 "data$i = ?"
             } else {
-                "data$i[?] = ?"
+                (1..nkeys).joinToString(",") { j ->
+                    "data$i['key$j'] = ?"
+                }
             }
         }
+
         insert = session.prepare("UPDATE map_stress SET $update_args WHERE id = ?")
         select = session.prepare("SELECT * from map_stress WHERE id = ?")
         delete = session.prepare("DELETE from map_stress WHERE id = ?")
+        (1..nkeys).forEach() { i->
+            entries["key$i"] = "value"
+        }
     }
 
     override fun schema(): List<String> {
@@ -50,16 +65,25 @@ class Maps : IStressProfile {
 
 
     override fun getRunner(context: StressContext): IStressRunner {
+
+        val value = context.registry.getGenerator("maps", "value")
+
         return object : IStressRunner {
             override fun getNextMutation(partitionKey: PartitionKey): Operation {
-                val map = mapOf("key" to "value")
                 val bound = insert.bind()
                 return if (frozen == "true") {
-                    (1..ncols).forEach(){i -> bound.setMap("data$i", map)}
+                    (1..nkeys).forEach() { i->
+                        entries["key$i"] = value.getText()
+                    }
+
+                    (1..ncols).forEach(){i -> bound.setMap("data$i", entries)}
                     Operation.Mutation(bound.setString("id", partitionKey.getText()))
                 } else {
-                    (1..ncols).forEach(){i -> bound.setString((i-1)*2, "key")}
-                    (1..ncols).forEach(){i -> bound.setString((i-1)*2+1, "value")}
+                    (1..ncols).forEach() { i ->
+                        (1..nkeys).forEach() { j ->
+                            bound.setString(nkeys * (i - 1) + j - 1, value.getText())
+                        }
+                    }
                     Operation.Mutation(bound.setString("id", partitionKey.getText()))
                 }
             }
@@ -74,5 +98,10 @@ class Maps : IStressProfile {
                 return Operation.Deletion(b)
             }
         }
+    }
+
+    override fun getFieldGenerators(): Map<Field, FieldGenerator> {
+        val kv = FieldFactory("maps")
+        return mapOf(kv.getField("value") to Random().apply{min=100; max=200})
     }
 }
